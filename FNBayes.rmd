@@ -1,0 +1,102 @@
+---
+title: "False Negative Probabilities with Bayes Theorem"
+author: "MMorse"
+date: "2023-12-19"
+output: html_document
+---
+
+
+```{r}
+#Simulate posterior distributions for psi and p of every site-species combination (normally this would be extracted from a Bayesian occupancy model)
+
+n.species <- 10
+n.sites <- 60
+n.post <- 500 #number of samples in the posterior distribution for each parameter
+n.cols <- 100 
+n.parms <-600 #the number of site-species combinations
+
+psi.means <- runif(n.parms, min = -2, max = 2)
+p.means <- runif(n.parms, min = -2, max = 2)
+
+#simulate a distribution around each mean
+logit.psi <- matrix(data = NA, nrow = n.post, ncol = n.parms)
+logit.p <- matrix(data = NA, nrow = n.post, ncol = n.parms)
+
+for(i in 1:n.parms){
+  logit.psi[,i] <- (rnorm(n.post, psi.means[i], sd = 0.3)) 
+  logit.p[,i] <- (rnorm(n.post, p.means[i], sd = 0.3))
+}
+
+# transform parameter estimates from the logit to probability scale
+psi.posterior <- exp(logit.psi) / ( 1 + exp(logit.psi)) 
+p.posterior <- exp(logit.p) / ( 1 + exp(logit.p))
+
+#decides the true presence/absence (1/0) of every species at each site
+true.comm <- matrix((as.numeric(lapply(colMeans(psi.posterior), rbern, n = 1))), ncol = n.sites, nrow = n.species) 
+
+#decides whether our surveys observed/unobserved (1/0) every species at each site
+observed.comm <- matrix((as.numeric(lapply(colMeans(p.posterior)*true.comm, rbern, n = 1))), ncol = n.sites, nrow = n.species) 
+
+```
+
+```{r}
+#Based on our psi and p probability distributions, we generate draws of z (estimate of a species' true presence/absence) and y (estimated observation based the probability of occurrence and detection)
+
+z.draws <- list() #estimated true state of the system (estimated presence or absence 1/0)
+y <- list()
+y.draws <- list() #estimated observations (estimated detection or non-detection 1/0)
+
+for (j in seq(n.parms)){
+
+z <- lapply(psi.posterior[,j], rbern, n = n.cols)
+z.draws[[j]] <- matrix(unlist(z),ncol = n.cols , byrow = TRUE)
+
+y[[j]] <- lapply(p.posterior[,j] * z.draws[[j]], rbern, n = 1)
+y.draws[[j]] <- matrix(unlist(y[[j]]), ncol = n.cols)
+}
+```
+
+```{r}
+#Count the number of times y.draws species-site combination resulted in a false negative (a truly present but undetected species-site combination) based on the given psi and p
+undet.sum <- list()
+total.sum <- list()
+FN.count <- list()
+FN.prob.undet <- list()
+FN.prob.total <- list()
+
+for( j in seq(n.parms)){
+  undet.sum[[j]] <- matrix(data = NA, nrow = n.post)
+  total.sum[[j]] <- matrix(data = NA, nrow = n.post)
+  FN.count[[j]] <- matrix(data = NA, nrow = n.post)
+  FN.prob.undet[[j]] <- matrix(data = NA, nrow = n.post)
+  FN.prob.total[[j]] <- matrix(data = NA, nrow = n.post)
+  
+  for(i in seq(n.post)){
+    undet.sum[[j]][i] <- length(y.draws[[j]][i,]) - sum(y.draws[[j]][i,]) #counts the number of times a site-species combinations was estimated to be undetected given psi and p
+    total.sum[[j]][i] <- length(y.draws[[j]][i,])
+    
+    FN.matrix <- ifelse(z.draws[[j]][i,] - y.draws[[j]][i,] > .9,1,0) 
+    FN.count[[j]][i] <- sum(FN.matrix) #counts the number of times a site-species combination resulted in a false negative
+    
+    FN.prob.undet[[j]][i] <- FN.count[[j]][i] / undet.sum[[j]][i] #use Bayes theorem to calculate the probability of a false negative when undetected
+    FN.prob.total[[j]][i] <- FN.count[[j]][i] / total.sum[[j]][i] #use Bayes theorem to calculate the probability of a false negative overall
+    
+    }
+}
+```
+
+
+```{r}
+#add false negative probabilities to the observed community
+FN.prob.dist <- matrix(unlist(FN.prob.total), nrow = n.post)
+FN.prob.mean <- matrix(colMeans(FN.prob.dist), ncol = n.sites, nrow = n.species)
+estimated.comm <- observed.comm + FN.prob.mean
+estimated.comm <- ifelse(estimated.comm >1,1, estimated.comm)
+
+#create heatmap illustrating the true community, the observed community, and the estimated community with FN probabilities
+heatmap(true.comm, Rowv = NA, Colv = NA, scale = 'none', main = "True Presence of Species at Sites", ylab = "Species" , xlab = "Sites")
+heatmap(observed.comm, Rowv = NA, Colv = NA, scale = 'none', main = "Observed Species at Sites", ylab = "Species", xlab = "Sites")
+heatmap(estimated.comm, Rowv = NA, Colv = NA, scale = 'none', main = "Estimated False Negative Probabilities", ylab = "Species", xlab = "Sites")
+
+```
+
